@@ -18,13 +18,32 @@ class CheckersConfig(Config):
 
     checkers_n_samples:int = 2000
 
-    max_steps:int = 150000
-    batch_size:int = 400
+    max_steps:int = 50000
+    batch_size:int = 8
     lr:float = 1e-3
     warmup_ratio:float = 0.2
-    max_valid_steps:int = 100
-    valid_interval:int = 500
+    max_valid_steps:int = 10
+    valid_interval:int = 50
 
+@torch.no_grad()
+def sliced_wasserstein(x_gen: Tensor, x_real: Tensor, n_proj: int = 100):
+    device = x_gen.device
+    w1 = 0.0
+
+    for _ in range(n_proj):
+        direction = torch.randn(2, device=device)
+        direction = direction / direction.norm()
+
+        proj_gen = x_gen @ direction
+        proj_real = x_real @ direction
+
+        w1 += torch.mean(
+            torch.abs(
+                torch.sort(proj_gen)[0] - torch.sort(proj_real)[0]
+            )
+        )
+
+    return w1 / n_proj
 
 class FlowTrainer(BaseTrainer):
     def __init__(self,
@@ -93,6 +112,7 @@ class FlowTrainer(BaseTrainer):
         os.makedirs(self.config.ckpt_dir, exist_ok=True)
         filename = os.path.join(self.config.ckpt_dir,f'weights-{step}.safetensors')
         save_file(weights, filename)
+
         if self.config.save_plots:
             plots_dir = self.config.save_plots
             image_dir = os.path.join(plots_dir, f'flow-map-plots-{step}')
@@ -100,22 +120,27 @@ class FlowTrainer(BaseTrainer):
             start_path = os.path.join(image_dir, 'start.png')
             end_path = os.path.join(image_dir, 'end.png')
             results = self.model.sample(self.config.checkers_n_samples)
+            x_hat = results[-1]
+            x_true = next(self.train_loader)[0][0].to(self.device)
+            w1 = sliced_wasserstein(x_hat, x_true)
+            self.exp.log_metrics({'w1': w1})
             plot_checkerboard(results[0].cpu().detach().numpy(), save = start_path)
             plot_checkerboard(results[-1].cpu().detach().numpy(), save = end_path)
 
 
-    def train_step(self, batch):
+    def train_step(self, batch, step):
         loss = self.compute_loss(batch)
-        self.exp.log_metrics({'train_loss': loss})
+        lr = self.optimizer.param_groups[0]['lr']
+        self.exp.log_metrics({'train_loss': loss, 'lr': lr, 'train_step': step})
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
         self.scheduler.step()
         return loss
 
-    def valid_step(self, batch):
+    def valid_step(self, batch, step):
         loss = self.compute_loss(batch)
-        self.exp.log_metrics({'valid_loss': loss})
+        self.exp.log_metrics({'valid_loss': loss, 'valid_step': step})
         return loss
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ class BaseTrainer(ABC):
         self.valid_loader = None
         self.device = None
 
+        self.cur_valid_step = 0
+
         self.configure_optimizers()
         self.configure_loaders()
 
@@ -39,10 +41,10 @@ class BaseTrainer(ABC):
         ...
 
     @abstractmethod
-    def train_step(self, batch):
+    def train_step(self, batch, step):
         ...
     @abstractmethod
-    def valid_step(self, batch):
+    def valid_step(self, batch, step):
         ...
 
     @abstractmethod
@@ -53,7 +55,7 @@ class BaseTrainer(ABC):
         prog_bar = tqdm(total = self.config.max_steps)
         for step in tqdm(range(self.config.max_steps)):
             batch = next(self.train_loader)
-            train_loss = self.train_step(batch)
+            train_loss = self.train_step(batch, step)
             prog_bar.update(1)
             if step % self.config.log_intervals == 0:
                 log_info = {
@@ -70,7 +72,7 @@ class BaseTrainer(ABC):
         prog_bar = tqdm(total = self.config.max_valid_steps)
         for step in range(self.config.max_valid_steps):
             batch = next(self.valid_loader)
-            valid_loss = self.valid_step(batch)
+            valid_loss = self.valid_step(batch, step + self.cur_valid_step)
             prog_bar.update(1)
             if step % self.config.log_intervals == 0:
                 log_info = {
@@ -78,6 +80,8 @@ class BaseTrainer(ABC):
                     'loss':f"{valid_loss:.4f}"
                 }
                 prog_bar.set_postfix(log_info)
+
+        self.cur_valid_step += self.config.max_valid_steps
         self.model.train()
 
 
