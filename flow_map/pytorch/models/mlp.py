@@ -21,6 +21,14 @@ def euler(func, y0, t):
         xs.append(x.clone().squeeze(0))
     return xs
 
+def sinusoidal_t(t, dim):
+    half = dim // 2
+    freqs = torch.exp(
+        -torch.arange(half, device=t.device) * torch.log(torch.tensor(10000.0)) / (half - 1)
+    )
+    emb = t * freqs
+    return torch.cat([emb.sin(), emb.cos()], dim=-1)
+
 class MLP(nn.Module):
     def __init__(
             self,
@@ -30,7 +38,7 @@ class MLP(nn.Module):
         super().__init__()
 
         self.time_proj = nn.Sequential(
-            nn.Linear(1, n_neurons),
+            nn.Linear(n_neurons, n_neurons),
             nn.GELU(),
             nn.Linear(n_neurons, n_neurons),
         )
@@ -45,11 +53,16 @@ class MLP(nn.Module):
         layers.append(nn.Linear(n_neurons, output_dim))
 
         self.layers = nn.ModuleList(layers)
+        nn.init.zeros_(self.layers[-1].weight)
+        nn.init.zeros_(self.layers[-1].bias)
+
+        self.n_neurons = n_neurons
 
     def forward(self, x:Tensor, t:Tensor, c:Tensor|tuple[Tensor, Tensor] = None):
-        t = t.unsqueeze(1).unsqueeze(1)
-
-        t_embed = self.time_proj(t)
+        t = t[:, None]
+        t_embed = sinusoidal_t(t, self.n_neurons)
+        t_embed = self.time_proj(t_embed)
+        t_embed = t_embed[:, None, :]
 
         x = self.layers[0](x)
         for layer in self.layers[1:-1]:

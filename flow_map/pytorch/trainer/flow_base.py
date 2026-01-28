@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import torch
 from torch.nn import functional as F
 from torch import nn, Tensor, optim
@@ -7,6 +7,8 @@ from flow_map.pytorch.data import checkerboard_loader
 from flow_map.trainer import Config, BaseTrainer
 from flow_map.common import plot_checkerboard
 from safetensors.torch import save_file
+from comet_ml import start
+from datetime import datetime
 
 @dataclass
 class CheckersConfig(Config):
@@ -17,11 +19,12 @@ class CheckersConfig(Config):
     checkers_n_samples:int = 2000
 
     max_steps:int = 150000
-    batch_size:int = 256
-    lr:float = 3e-4
+    batch_size:int = 400
+    lr:float = 1e-3
     warmup_ratio:float = 0.2
     max_valid_steps:int = 100
-    valid_interval:int = 1000
+    valid_interval:int = 500
+
 
 class FlowTrainer(BaseTrainer):
     def __init__(self,
@@ -37,6 +40,11 @@ class FlowTrainer(BaseTrainer):
         self.device = device
 
         self.model = model.to(device)
+        self.exp = start(
+            project_name = 'flow-maps',
+            workspace='odunola',
+        )
+        self.exp.log_parameters(asdict(config))
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(
@@ -97,6 +105,7 @@ class FlowTrainer(BaseTrainer):
 
     def train_step(self, batch):
         loss = self.compute_loss(batch)
+        self.exp.log_metrics({'train_loss': loss})
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
@@ -105,11 +114,12 @@ class FlowTrainer(BaseTrainer):
 
     def valid_step(self, batch):
         loss = self.compute_loss(batch)
+        self.exp.log_metrics({'valid_loss': loss})
         return loss
 
 if __name__ == "__main__":
     from flow_map.pytorch.models.mlp import MLP
-    device = torch.device('mps')
+    device = torch.device('cuda')
     model = MLP()
     config = CheckersConfig()
     trainer = FlowTrainer(model, config, device=device)
