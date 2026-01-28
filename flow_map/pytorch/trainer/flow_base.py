@@ -35,11 +35,12 @@ class FlowTrainer(BaseTrainer):
 
         super().__init__(model, config)
 
+        self.device = device
+        self.model = self.model.to(device)
+
         self.configure_optimizers()
         self.configure_loaders()
-        self.device = device
 
-        self.model = model.to(device)
         self.exp = start(
             project_name = 'flow-maps',
             workspace='odunola',
