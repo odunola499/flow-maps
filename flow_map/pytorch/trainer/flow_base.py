@@ -85,8 +85,9 @@ class FlowTrainer(BaseTrainer):
             max_width=4,
             max_height=4,
         )
-        self.train_loader = iter(loader)
-        self.valid_loader = iter(loader)
+        loader = iter(loader)
+        self.train_loader = loader
+        self.valid_loader = loader
 
 
     def compute_loss(self, data):

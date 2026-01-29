@@ -4,6 +4,9 @@ from tqdm import tqdm
 
 @dataclass
 class Config:
+    def __init__(self):
+        self.checkers_n_samples = None
+
     max_steps:int
     batch_size:int
     lr:float
