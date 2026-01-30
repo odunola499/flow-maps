@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 @dataclass
 class Config:

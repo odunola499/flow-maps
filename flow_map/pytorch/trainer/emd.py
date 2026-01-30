@@ -99,54 +99,20 @@ class EMDTrainer(BaseTrainer):
         )
         return v_s_t
 
-    def compute_flow_map(
-            self,
-            I:Tensor,
-            start_time:Tensor,
-            end_time:Tensor
-    ):
-        v_s_t = self.run_student_model(I, start_time, end_time)
-        out = I + (end_time-start_time)[:, None, None] * v_s_t
-        return out
+    def compute_eulerian_residual(self,
+                                  I:Tensor, start_time:Tensor, end_time:Tensor ):
+        v_ss = self.teacher(I, start_time)
 
-    def compute_time_derivative(self, I:Tensor, start_time:Tensor, end_time:Tensor):
+        def func(s, x):
+            dt = end_time - s
+            return x + (dt[:, None, None] * self.run_student_model(x, s, end_time))
 
-        def compute_student_derivative(s):
-            return self.run_student_model(I, s, end_time)
-
-        v_s_t = self.run_student_model(I, start_time, end_time)
-        dt = end_time - start_time
-        dv_ds = torch.func.jvp(
-            compute_student_derivative, (start_time,), (torch.ones_like(start_time),)
-        )[1]
-        return (dt[:, None, None] * dv_ds) - v_s_t # correct
-
-    def compute_teacher_spatial_derivative(self, I:Tensor, start_time:Tensor, end_time:Tensor):
-        def func(x):
-            return self.teacher(x, start_time)
-
-        flow_map = self.compute_flow_map(I, start_time, end_time)
-        b = func(I)
-        #db_dx = torch.autograd.grad(b, I)[0]
-        db_dx = torch.func.jvp(
-            func, (I,), (torch.ones_like(I),)
-        )[1]
-
-        return flow_map * db_dx, flow_map, b
-
-    def compute_student_spatial_derivative(self, I:Tensor, start_time:Tensor, end_time:Tensor, b:Tensor):
-        def func(x):
-            return self.model(x, start_time, end_time)
-
-        v = func(I)
-        #dv_dx = torch.autograd.grad(v, I)[0]
-        dv_dx = torch.func.jvp(
-            func, (I,), (torch.ones_like(I),)
-        )[1]
-        dt = end_time - start_time
-        #print(dv_dx.shape)
-        #print(dt.shape)
-        return b * (1 + dt[:,None, None] * dv_dx)
+        X_t, D_X_t = torch.func.jvp(
+            func, primals = (start_time, I), tangents=(
+                torch.ones_like(start_time), v_ss.detach()
+            )
+        )
+        return X_t, D_X_t
 
 
     def compute_loss(self, data):
@@ -160,15 +126,9 @@ class EMDTrainer(BaseTrainer):
         t = s + t * (1-s)
 
         I_s = self.get_interpolant(x_0, x_1, s)
-        partial_t = self.compute_time_derivative(I_s, s, t)
-        teacher_spatial, flow_map, b = self.compute_teacher_spatial_derivative(I_s, s, t)
-        student_spatial = self.compute_student_spatial_derivative(I_s, s, t, b)
-
-        with torch.no_grad():
-            teacher_term = (student_spatial + teacher_spatial).detach()
-
-        loss = (partial_t + teacher_term)**2
-        return loss.mean()
+        X_t, residual = self.compute_eulerian_residual(I_s, s, t)
+        loss = residual.pow(2).mean()
+        return loss
 
 
     def train_step(self, batch, step):
@@ -200,7 +160,7 @@ if __name__ == "__main__":
     )
     batch = next(iter(loader))
     trainer = EMDTrainer(teacher, student, config, device=device)
-    #print(trainer.compute_loss(batch))
+    print(trainer.compute_loss(batch))
     trainer.train()
 
 

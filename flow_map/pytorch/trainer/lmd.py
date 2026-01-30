@@ -99,27 +99,16 @@ class LMDTrainer(BaseTrainer):
         )
         return v_s_t
 
-    def compute_flow_map(
-            self,
-            I:Tensor,
-            start_time:Tensor,
-            end_time:Tensor
-    ):
-        v_s_t = self.run_student_model(I, start_time, end_time)
-        out = I + (end_time-start_time)[:, None, None] * v_s_t
-        return out
-
     def compute_time_derivative(self, I:Tensor, start_time:Tensor, end_time:Tensor):
 
-        def compute_student_derivative(t):
-            return self.run_student_model(I, start_time, t)
+        def func(t):
+            dt = t - start_time
+            return I + (dt[:, None, None] * self.run_student_model(I, start_time, t))
 
-        v_s_t = self.run_student_model(I, start_time, end_time)
-        dt = end_time - start_time
-        dv_dt = torch.func.jvp(
-            compute_student_derivative, (end_time,), (torch.ones_like(end_time),)
-        )[1]
-        return v_s_t + (dt[:, None, None] * dv_dt)
+        X_t, D_X_t = torch.func.jvp(
+            func, (end_time, ), (torch.ones_like(end_time),)
+        )
+        return X_t, D_X_t
 
     def compute_loss(self, data):
         x_1, width, height = data
@@ -132,12 +121,11 @@ class LMDTrainer(BaseTrainer):
         t = s + t * (1-s)
 
         I_s = self.get_interpolant(x_0, x_1, s)
-        partial_t = self.compute_time_derivative(I_s, s, t)
-        flow_map = self.compute_flow_map(I_s, s, t)
+        X_t, D_X_t = self.compute_time_derivative(I_s, s, t)
 
         with torch.no_grad():
-            vector_field = self.teacher(flow_map.detach(), t)
-        loss = (partial_t - vector_field)**2
+            vector_field = self.teacher(X_t.detach(), t)
+        loss = (D_X_t - vector_field)**2
         return loss.mean()
 
     def train_step(self, batch, step):
@@ -169,7 +157,7 @@ if __name__ == "__main__":
     )
     batch = next(iter(loader))
     trainer = LMDTrainer(teacher, student, config, device=device)
-    #print(trainer.compute_loss(batch))
+    print(trainer.compute_loss(batch))
     trainer.train()
 
 

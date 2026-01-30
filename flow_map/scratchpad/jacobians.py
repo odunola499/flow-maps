@@ -22,3 +22,19 @@ vjp = x.grad
 
 print(f"\nVJP (v^T J) = {vjp}")  # shape [3]
 print(f"Manual: {v @ jacobian}")
+
+
+def func(x):
+    return torch.stack(
+        [
+            x**2 + 3*x + 2
+        ]
+    )
+
+x = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+y = func(x)
+print(y)
+
+output, jvp_out = torch.func.jvp(func, (x,), (torch.ones_like(x),))
+print(output)
+print(jvp_out)

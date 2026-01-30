@@ -25,7 +25,8 @@ class CheckersConfig(Config):
     max_valid_steps:int = 10
     valid_interval:int = 50
 
-@torch.no_grad()
+    torch.no_grad()
+
 def sliced_wasserstein(x_gen: Tensor, x_real: Tensor, n_proj: int = 100):
     device = x_gen.device
     w1 = 0.0
@@ -44,6 +45,26 @@ def sliced_wasserstein(x_gen: Tensor, x_real: Tensor, n_proj: int = 100):
         )
 
     return w1 / n_proj
+
+    @torch.no_grad()
+    def sliced_wasserstein(x_gen: Tensor, x_real: Tensor, n_proj: int = 100):
+        device = x_gen.device
+        w1 = 0.0
+
+        for _ in range(n_proj):
+            direction = torch.randn(2, device=device)
+            direction = direction / direction.norm()
+
+            proj_gen = x_gen @ direction
+            proj_real = x_real @ direction
+
+            w1 += torch.mean(
+                torch.abs(
+                    torch.sort(proj_gen)[0] - torch.sort(proj_real)[0]
+                )
+            )
+
+        return w1 / n_proj
 
 class FlowTrainer(BaseTrainer):
     def __init__(self,

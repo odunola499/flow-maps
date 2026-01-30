@@ -34,12 +34,12 @@ class CheckerboardDataset(IterableDataset):
 
     def __iter__(self):
         while True:
-            #width = random.randint(1, self.max_width)
+            width = random.randint(1, self.max_width)
             #height = random.randint(1, self.max_height)
-            width = self.max_width
+            #width = self.max_width
             height = self.max_height
             board = checkerboard(
-                self.max_width, self.max_height, n_samples=self.n_samples
+                width, self.max_height, n_samples=self.n_samples
             )
             board = torch.from_numpy(board)
             yield board, width, height
@@ -59,7 +59,7 @@ class CheckerboardDataset(IterableDataset):
 if __name__ == "__main__":
     board = checkerboard(6, 4, 1000)
     print(board.shape)
-    plot_checkerboard(board)
+    # plot_checkerboard(board)
     loader = get_loader(batch_size = 4, n_samples = 100)
     for batch in loader:
         data, width, height = batch
