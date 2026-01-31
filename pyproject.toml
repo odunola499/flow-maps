@@ -11,11 +11,16 @@ requires-python = ">=3.10"
 authors = [{ name = "Odunola" }]
 dependencies = [
     "comet-ml>=3.55.0",
+    "flax>=0.10.7",
+    "jax>=0.6.2",
     "matplotlib>=3.10.8",
     "mlx>=0.30.3",
+    "optax>=0.2.6",
     "safetensors>=0.7.0",
     "torch>=2.10.0",
+    "torchvision>=0.25.0",
     "tqdm>=4.67.1",
+    "transformers>=5.0.0",
 ]
 
 [project.optional-dependencies]

@@ -35,14 +35,12 @@ class CheckerboardDataset(IterableDataset):
     def __iter__(self):
         while True:
             width = random.randint(1, self.max_width)
-            #height = random.randint(1, self.max_height)
-            #width = self.max_width
-            height = self.max_height
+            height = random.randint(1, self.max_height)
             board = checkerboard(
-                width, self.max_height, n_samples=self.n_samples
+                width, height, n_samples=self.n_samples
             )
             board = torch.from_numpy(board)
-            yield board, width, height
+            yield board, width - 1, height - 1
 
     def _collate_fn(self, batch):
         data = [i[0] for i in batch]
@@ -59,7 +57,7 @@ class CheckerboardDataset(IterableDataset):
 if __name__ == "__main__":
     board = checkerboard(6, 4, 1000)
     print(board.shape)
-    # plot_checkerboard(board)
+    plot_checkerboard(board)
     loader = get_loader(batch_size = 4, n_samples = 100)
     for batch in loader:
         data, width, height = batch

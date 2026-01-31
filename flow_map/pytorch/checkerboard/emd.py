@@ -1,11 +1,10 @@
 import os
-from dataclasses import dataclass, asdict
-from comet_ml import start
+from dataclasses import dataclass
 import torch
 from torch import nn, Tensor, optim
 from flow_map.pytorch.data import checkerboard_loader
 from flow_map.trainer import Config, BaseTrainer
-from flow_map.pytorch.trainer.flow_base import sliced_wasserstein
+from flow_map.pytorch.checkerboard.flow_base import sliced_wasserstein
 from flow_map.common import plot_checkerboard
 from safetensors.torch import save_file
 
@@ -149,7 +148,7 @@ class EMDTrainer(BaseTrainer):
 
 
 if __name__ == "__main__":
-    from flow_map.pytorch.models.mlp import MLP, FlowMapMLP
+    from flow_map.pytorch.checkerboard.model import MLP, FlowMapMLP
     device = torch.device('mps')
 
     config = CheckersConfig()
