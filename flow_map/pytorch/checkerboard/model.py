@@ -35,6 +35,10 @@ def sinusoidal_t(t, dim):
     emb = t * freqs
     return torch.cat([emb.sin(), emb.cos()], dim=-1)
 
+def mp_sum(a, b, t: float = 0.5):
+
+    lerp_result = a * (1 - t) + b * t
+    return lerp_result / math.sqrt((1 - t) ** 2 + t**2)
 
 class Snake(nn.Module):
     def __init__(self, alpha=1):
@@ -129,11 +133,6 @@ class FlowMapMLP(nn.Module):
             nn.GELU(),
             nn.Linear(n_neurons, n_neurons),
         )
-        # self.s_proj = nn.Sequential(
-        #     nn.Linear(n_neurons, n_neurons),
-        #     nn.GELU(),
-        #     nn.Linear(n_neurons, n_neurons),
-        # )
 
         layers = []
         layers.append(nn.Linear(output_dim, n_neurons))
@@ -212,13 +211,6 @@ class CondFlowMapMLP(nn.Module):
             nn.Linear(n_neurons * 2, n_neurons * 2),
         )
 
-        self.time_proj = nn.Sequential(
-            nn.Linear(n_neurons, n_neurons),
-            nn.GELU(),
-            nn.Linear(n_neurons, n_neurons),
-        )
-
-
         layers = []
         layers.append(nn.Linear(output_dim, n_neurons))
         layers.append(nn.GELU())
@@ -230,17 +222,18 @@ class CondFlowMapMLP(nn.Module):
 
         self.layers = nn.ModuleList(layers)
         self.n_neurons = n_neurons
+        nn.init.zeros_(self.layers[-1].weight)
+        nn.init.zeros_(self.layers[-1].bias)
 
     def forward(self, x: Tensor, s: Tensor, t: Tensor, c: Tensor):
 
         t = t[:, None]
         s = s[:, None]
 
-        t = t - s
-        t = self.time_proj(sinusoidal_t(t, self.n_neurons))[:, None, :]
-        s = self.time_proj(sinusoidal_t(s, self.n_neurons))[:, None, :]
-
-        time_embed = (t + s) / math.sqrt(2)
+        dt = t - s
+        s_embed = sinusoidal_t(s, self.n_neurons // 2)[:, None, :]
+        dt_embed = sinusoidal_t(dt, self.n_neurons // 2)[:, None, :]
+        time_embed = torch.concat([s_embed, dt_embed], dim=-1)
 
         c_params = self.c_proj(c)
         c_scale, c_shift = c_params.chunk(2, dim=-1)
@@ -252,7 +245,7 @@ class CondFlowMapMLP(nn.Module):
             if isinstance(layer, nn.Linear):
                 x = x + time_embed
                 x = layer(x)
-                x = x * (1 + c_scale) + c_shift
+                x = (x * (1 + c_scale)) + c_shift
             else:
                 x = layer(x)
         x = self.layers[-1](x)
@@ -309,20 +302,36 @@ def test_pretrained_lmd_model():
     end = results[-1].cpu().detach().numpy()
     plot_checkerboard(end, save=None)
 
-
-if __name__ == "__main__":
+def run_test():
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
     model = CondFlowMapMLP().to(device)
     tensor = torch.randn(2, 100, 2, device=device)
-    tensor = tensor.view(200, 2)
-    s = torch.rand([2], device=device)
-    t = torch.rand([2], device=device)
-    c = torch.tensor([0, 1], device=device)  # Use valid class indices (0 to num_classes-1)
+    for i in range(7):
+        s = torch.rand([2], device=device)
+        t = torch.rand([2], device=device)
+        c = torch.tensor([0, 1], device=device)
 
-    output = model(tensor, s, t, c)
+        output = model(tensor, s, t, c)
 
     print(c.shape)
     print(output.shape)
 
-    output = model.sample(2000, num_steps=1)
-    print(output[-1].shape)
+
+
+def run_smokescreen():
+    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+    model = CondFlowMapMLP().to(device)
+
+    for i in range(7):
+        s = torch.rand([2], device=device)
+        t = torch.rand([2], device=device)
+
+        s_embed = sinusoidal_t(s[:, None], model.n_neurons // 2)
+        t_embed = sinusoidal_t(t[:, None], model.n_neurons // 2)
+
+        print(f"s={s[0]:.3f}, t={t[0]:.3f} | "
+              f"embed_diff={torch.norm(s_embed[0] - t_embed[0]):.3f}")
+
+
+if __name__ == "__main__":
+    run_test()

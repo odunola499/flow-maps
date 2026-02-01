@@ -6,6 +6,7 @@ from flow_map.common import plot_checkerboard, checkerboard
 
 def get_loader(
         batch_size,
+        cond = False,
         max_width:int = 10,
         max_height:int = 10,
         n_samples:int = int(1e7)
@@ -14,7 +15,7 @@ def get_loader(
     dataset = CheckerboardDataset(
         max_width=max_width,
         max_height=max_height,
-        n_samples=n_samples
+        n_samples=n_samples, cond=cond
     )
 
     loader = DataLoader(
@@ -26,16 +27,24 @@ def get_loader(
     return loader
 
 class CheckerboardDataset(IterableDataset):
-    def __init__(self, max_width:int = 10, max_height:int = 10, n_samples:int = 1000):
+    def __init__(self, max_width:int = 10, max_height:int = 10, n_samples:int = 1000,
+                 cond = False):
         super().__init__()
         self.n_samples = n_samples
         self.max_width = max_width
         self.max_height = max_height
+        self.cond = cond
 
     def __iter__(self):
         while True:
-            width = random.randint(1, self.max_width)
-            height = random.randint(1, self.max_height)
+            #width = random.randint(1, self.max_width)
+            # height = random.randint(1, self.max_height)
+            if self.cond:
+                width = random.randint(0, self.max_width)
+                height = random.randint(0, self.max_height)
+            else:
+                height = self.max_height
+                width = self.max_width
             board = checkerboard(
                 width, height, n_samples=self.n_samples
             )
@@ -56,8 +65,10 @@ class CheckerboardDataset(IterableDataset):
 
 if __name__ == "__main__":
     board = checkerboard(6, 4, 1000)
+    tensor_board = torch.from_numpy(board)
+    rand_board = torch.randn_like(tensor_board).numpy()
     print(board.shape)
-    plot_checkerboard(board)
+    #plot_checkerboard(rand_board)
     loader = get_loader(batch_size = 4, n_samples = 100)
     for batch in loader:
         data, width, height = batch

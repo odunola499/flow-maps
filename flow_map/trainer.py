@@ -39,7 +39,7 @@ class BaseTrainer(ABC):
     @abstractmethod
     def configure_loaders(self):
         ...
-    @abstractmethod
+
     def compute_loss(self, batch):
         ...
 
@@ -55,6 +55,7 @@ class BaseTrainer(ABC):
         ...
 
     def train_loop(self):
+        self.model.train()
         prog_bar = tqdm(total = self.config.max_steps)
         for step in tqdm(range(self.config.max_steps)):
             batch = next(self.train_loader)
@@ -75,7 +76,7 @@ class BaseTrainer(ABC):
         prog_bar = tqdm(total = self.config.max_valid_steps)
         for step in range(self.config.max_valid_steps):
             batch = next(self.valid_loader)
-            valid_loss = self.valid_step(batch, step + self.cur_valid_step)
+            valid_loss = self.valid_step(batch, step + 1 + self.cur_valid_step)
             prog_bar.update(1)
             if step % self.config.log_intervals == 0:
                 log_info = {

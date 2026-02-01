@@ -1,9 +1,8 @@
 import os
-import math
 import copy
 import glob
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import torch
 from torch import Tensor, optim
 from flow_map.pytorch.checkerboard.data import get_loader as checkerboard_loader
@@ -13,6 +12,7 @@ from safetensors.torch import save_file
 
 from flow_map.pytorch.checkerboard.model import CondFlowMapMLP
 from transformers import get_cosine_schedule_with_warmup
+import wandb
 
 
 @dataclass
@@ -21,16 +21,16 @@ class CheckersConfig(Config):
     n_neurons: int = 512
     output_dim: int = 2
 
-    checkers_n_samples: int = 5000
+    checkers_n_samples: int = 1000
 
     max_steps: int = 50000
     batch_size: int = 16
-    lr: float = 3e-4
+    lr: float = 1e-3
     warmup_ratio: float = 0.2
     max_valid_steps: int = 10
-    valid_interval: int = 500
+    valid_interval: int = 1000
 
-    ema_decay: float = 0.999
+    ema_decay: float = 0
 
     max_checkpoints: int = 5
 
@@ -61,8 +61,7 @@ class LSDTrainer(BaseTrainer):
                  n: float = 0.75):
         super().__init__(model, config)
         self.device = device
-        self.model: CondFlowMapMLP = self.model.to(device)
-        self.n = n
+        self.Md = int(n * self.config.batch_size)
 
         self.ema_model = copy.deepcopy(self.model)
         self.ema_model.requires_grad_(False)
@@ -70,8 +69,14 @@ class LSDTrainer(BaseTrainer):
 
         self.configure_optimizers()
         self.config = config
-        # self.exp = start(project_name='flow-maps', workspace='odunola')
-        # self.exp.log_parameters(asdict(config))
+        wandb.init(project='flow maps', entity='jenrola2292', config =
+                   asdict(config))
+
+        if self.device.type == 'cuda':
+            print('Using torch compile')
+            self.compute_loss = torch.compile(self._compute_loss)
+        else:
+            self.compute_loss = self._compute_loss
 
     @torch.no_grad()
     def update_ema(self):
@@ -79,7 +84,7 @@ class LSDTrainer(BaseTrainer):
             ema_param.data.mul_(self.ema_decay).add_(param.data, alpha=1 - self.ema_decay)
 
     def configure_optimizers(self):
-        optimizer = optim.AdamW(
+        optimizer = optim.RAdam(
             self.model.parameters(),
             lr=self.config.lr,
         )
@@ -159,10 +164,7 @@ class LSDTrainer(BaseTrainer):
             os.makedirs(image_dir, exist_ok=True)
             start_path = os.path.join(image_dir, 'start.png')
             end_path = os.path.join(image_dir, 'end.png')
-            results = self.ema_model.sample(self.config.checkers_n_samples, num_steps=2)
-            x_hat = results[-1]
-            x_true = next(self.train_loader)[0][0].to(self.device)
-            #w1 = sliced_wasserstein(x_hat, x_true)
+            results = self.ema_model.sample(self.config.checkers_n_samples, num_steps=50)
             plot_checkerboard(results[0].cpu().detach().numpy(), save=start_path)
             plot_checkerboard(results[-1].cpu().detach().numpy(), save=end_path)
             self._cleanup_old_plots()
@@ -188,91 +190,96 @@ class LSDTrainer(BaseTrainer):
     def compute_lsd_residual(self, x_1, c):
         B, N, D = x_1.shape
 
-        x_1_flat = x_1.reshape(B * N, 1, D)
-        c_flat = c.unsqueeze(1).expand(-1, N).reshape(B * N)
+        x_0 = torch.randn_like(x_1)
 
-        x_0 = torch.randn_like(x_1_flat)
-
-        temp1 = torch.rand([B * N], device=self.device)
-        temp2 = torch.rand([B * N], device=self.device)
+        temp1 = torch.rand([B], device=self.device)
+        temp2 = torch.rand([B], device=self.device)
         s = torch.minimum(temp1, temp2)
         t = torch.maximum(temp1, temp2)
 
-        I_s = self.get_interpolant(x_0, x_1_flat, s)
-        X_st, D_X_st = self.compute_time_derivative(I_s, s, t, c_flat)
+        I_s = self.get_interpolant(x_0, x_1, s)
+        X_st, D_X_st = self.compute_time_derivative(I_s, s, t, c)
 
-        v_tt = self.ema_model(X_st.detach(), t, t, c_flat)
+        with torch.no_grad():
+            v_tt = self.ema_model(X_st, t, t, c)
 
-        error_sq = (D_X_st - v_tt).pow(2).sum(dim=-1).mean(dim=-1)
+        error_sq = (D_X_st - v_tt).pow(2).mean()
+
         weight = self.compute_weight(s, t)
         weighted_loss = (torch.exp(-weight) * error_sq + weight).mean()
 
-        return weighted_loss
+        return error_sq
 
     def compute_flow_residual(self, x_1, c):
         B, N, D = x_1.shape
 
-        x_1_flat = x_1.reshape(B * N, 1, D)
-        c_flat = c.unsqueeze(1).expand(-1, N).reshape(B * N)
+        x_0 = torch.randn_like(x_1)
+        t = torch.rand([B], device=x_1.device)
 
-        x_0 = torch.randn_like(x_1_flat)
-        t = torch.rand([B * N], device=x_1.device)
-
-        x_t = self.get_interpolant(x_0, x_1_flat, t)
-        flow = x_1_flat - x_0
-        pred = self.model(x_t, t, t, c_flat)
-
-        # Compute weighted loss for diagonal (s=t, so weight uses small epsilon)
+        x_t = self.get_interpolant(x_0, x_1, t)
+        flow = x_1 - x_0
+        pred = self.model(x_t, t, t, c)
         error_sq = (pred - flow).pow(2).sum(dim=-1).mean(dim=-1)
-        weight = self.compute_weight(t, t)  # s=t for diagonal
+        error = torch.nn.functional.mse_loss(pred, flow)
+
+        weight = self.compute_weight(t, t)
         weighted_loss = (torch.exp(-weight) * error_sq + weight).mean()
 
-        return weighted_loss
+        return error.mean()
 
-    def compute_loss(self, data):
+    def _compute_loss(self, data):
         x_1, width, height = data
-        x_1 = x_1.to(self.device)
-        width = width.to(self.device)
+        Md = self.Md
 
-        M = x_1.shape[0]
-        Md = math.floor(self.n * M)
-        if Md <= 0:
-            Md = 1
         flow_loss = self.compute_flow_residual(x_1[:Md], width[:Md])
-        lsd_loss = self.compute_lsd_residual(x_1[Md:], width[Md:])
+        #lsd_loss = self.compute_lsd_residual(x_1[Md:], width[Md:])
+        lsd_loss = torch.zeros_like(flow_loss)
         return flow_loss + lsd_loss, flow_loss, lsd_loss
 
     def train_step(self, batch, step):
+        batch = tuple(b.to(self.device) for b in batch)
         loss, flow_loss, lsd_loss = self.compute_loss(batch)
-        print((loss.item(), flow_loss.item(), lsd_loss.item()))
-        lr = self.optimizer.param_groups[0]['lr']
-        # self.exp.log_metrics({'train_loss': loss, 'lr': lr, 'train_step': step,'train_flow_loss':flow_loss, 'train_lsd_loss':lsd_loss})
+
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
         self.optimizer.step()
         self.scheduler.step()
-
         self.update_ema()
 
+        lr = self.optimizer.param_groups[0]['lr']
+        wandb.log({
+            'train/loss': loss.item(),
+            'global/lr': lr,
+            'train/step': step,
+            'train/flow_loss': flow_loss.item(),
+            'train/lsd_loss': lsd_loss.item()
+        })
         return loss
 
     def valid_step(self, batch, step):
+        batch = tuple(b.to(self.device) for b in batch)
         loss, flow_loss, lsd_loss = self.compute_loss(batch)
-        # self.exp.log_metrics({'valid_loss': loss, 'valid_step': step,'valid_flow_loss': flow_loss,'valid_lsd_loss':lsd_loss})
+        wandb.log({
+            'valid/loss': loss.item(),
+            'valid/step': step,
+            'valid/flow_loss': flow_loss.item(),
+            'valid/lsd_loss': lsd_loss.item()
+        })
         return loss
 
 
 if __name__ == "__main__":
-    device = torch.device('mps')
-
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('mps')
     config = CheckersConfig()
     model = CondFlowMapMLP().to(device)
+
     loader = checkerboard_loader(
-        batch_size=8, n_samples=2000
+        batch_size=2048, n_samples=2000
     )
 
     batch = next(iter(loader))
     trainer = LSDTrainer(model, config, device)
 
-    #print(trainer.compute_loss(batch))
+    # print(trainer.compute_loss(batch))
     trainer.train()
