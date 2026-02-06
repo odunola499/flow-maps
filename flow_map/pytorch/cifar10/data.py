@@ -1,3 +1,4 @@
+import torch
 from datasets import load_dataset, Dataset as HFDataset
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
@@ -28,13 +29,21 @@ class Cifar10(Dataset):
         label = row['label']
         return img, label
 
-def get_loaders(batch_size = 2):
+def get_loaders(batch_size=2, num_workers=4):
     dataset = load_dataset('uoft-cs/cifar10')
     train = Cifar10(dataset['train'])
     valid = Cifar10(dataset['test'])
 
-    train_loader = DataLoader(train, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(valid, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(
+        train, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0, drop_last=True
+    )
+    valid_loader = DataLoader(
+        valid, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0
+    )
     return train_loader, valid_loader
 
 if __name__ == '__main__':

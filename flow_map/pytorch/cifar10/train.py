@@ -22,9 +22,9 @@ PI = math.pi
 class CifarConfig(Config):
     num_layers:int = 6
 
-    max_steps: int = 150000
-    batch_size: int = 32
-    lr: float = 3e-4
+    max_steps: int = 300000
+    batch_size: int = 256
+    lr: float = 5e-4
     warmup_ratio: float = 0.2
     max_valid_steps: int = 10
     valid_interval: int = 20000
@@ -39,7 +39,10 @@ class CifarConfig(Config):
     max_checkpoints: int = 5
 
     use_wandb: bool = False
-    iterp_type:str = 'polynomial' # can be linear or trig
+    iterp_type:str = 'polynomial' # can be linear or trig or polynomial
+
+    num_workers: int = 4
+    use_compile: bool = True
 
 
 class FlowTrainer(BaseTrainer):
@@ -59,10 +62,20 @@ class FlowTrainer(BaseTrainer):
         self.use_wandb = config.use_wandb
         self.loss_ema = None
         self.config = config
+        self.beta_sampler = torch.distributions.Beta(2.0, 2.0)
+        self._amp_enabled = (device.type == 'cuda')
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self._amp_enabled)
+
+        if config.use_compile and device.type == 'cuda':
+            self.model = torch.compile(self.model)
 
         if self.use_wandb:
-            wandb.init(project='flow maps', entity='jenrola2292', config=
-            asdict(config))
+            wandb.init(
+                project='flow maps',
+                entity='jenrola2292',
+                name=f'cifar10-{config.iterp_type}',
+                config=asdict(config)
+            )
 
     def log(self, metrics: dict):
         if self.use_wandb:
@@ -76,7 +89,7 @@ class FlowTrainer(BaseTrainer):
             ema_param.data.mul_(self.ema_decay).add_(param.data, alpha=1 - self.ema_decay)
 
     def configure_loaders(self):
-        train, valid = get_loaders(self.config.batch_size)
+        train, valid = get_loaders(self.config.batch_size, num_workers=self.config.num_workers)
         self.train_loader = iter(train)
         self.valid_loader = iter(valid)
         self.train_dataset = train
@@ -121,13 +134,20 @@ class FlowTrainer(BaseTrainer):
         else:
             raise NotImplementedError
 
+    def sample_time(self, B, device, dtype):
+        if self.config.iterp_type == 'linear':
+            return torch.rand([B], device=device, dtype=dtype)
+        else:
+            t = self.beta_sampler.sample([B]).to(device=device, dtype=dtype)
+            return t.clamp(1e-5, 1 - 1e-5)
+
 
     def compute_loss(self, batch):
         x1, label = batch
         B = x1.shape[0]
 
         x0 = torch.randn_like(x1)
-        t = torch.rand([B], dtype=x0.dtype, device=x0.device)
+        t = self.sample_time(B,x1.device, x1.dtype)
         xt = self.compute_interpolant(x0, x1, t)
         target = self.compute_target(x0, x1, t)
 
@@ -171,17 +191,22 @@ class FlowTrainer(BaseTrainer):
         save_image(denormalize(x1_cpu), filename)
 
     def train_step(self, batch, step):
-        batch = tuple(b.to(self.device) for b in batch)
-        loss = self.compute_loss(batch)
+        batch = tuple(b.to(self.device, non_blocking=True) for b in batch)
+
+        with torch.autocast(device_type=self.device.type,enabled=self._amp_enabled):
+            loss = self.compute_loss(batch)
+
         loss_value = loss.item()
         prev_ema = self.loss_ema
         self._update_loss_ema(loss_value)
         self._maybe_save_spike(batch, step, loss_value, prev_ema)
 
-        self.optimizer.zero_grad()
-        loss.backward()
+        self.optimizer.zero_grad(set_to_none=True)
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-        self.optimizer.step()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
         self.scheduler.step()
         self.update_ema()
 
@@ -195,8 +220,9 @@ class FlowTrainer(BaseTrainer):
         return loss
 
     def valid_step(self, batch, step):
-        batch = tuple(b.to(self.device) for b in batch)
-        loss = self.compute_loss(batch)
+        batch = tuple(b.to(self.device, non_blocking=True) for b in batch)
+        with torch.autocast(device_type=self.device.type,enabled=self._amp_enabled):
+            loss = self.compute_loss(batch)
 
         self.log({
             'valid/loss': loss.item(),
@@ -290,6 +316,10 @@ class FlowTrainer(BaseTrainer):
 
 
 if __name__ == "__main__":
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     if torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
@@ -303,4 +333,3 @@ if __name__ == "__main__":
         model = model, config = config, device = device
     )
     trainer.train()
-    #trainer.save_ckpt(step = 10)
