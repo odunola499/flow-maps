@@ -22,7 +22,8 @@ def get_loader(
         dataset,
         collate_fn=dataset._collate_fn,
         batch_size=batch_size,
-        shuffle = False
+        shuffle = False,
+        pin_memory = True
     )
     return loader
 
@@ -40,16 +41,16 @@ class CheckerboardDataset(IterableDataset):
             #width = random.randint(1, self.max_width)
             # height = random.randint(1, self.max_height)
             if self.cond:
-                width = random.randint(0, self.max_width)
-                height = random.randint(0, self.max_height)
+                width = random.randint(1, self.max_width)
+                height = random.randint(1, self.max_height)
             else:
                 height = self.max_height
                 width = self.max_width
             board = checkerboard(
                 width, height, n_samples=self.n_samples
             )
-            board = torch.from_numpy(board)
-            yield board, width - 1, height - 1
+            board = torch.from_numpy(board).float()
+            yield board, width, height
 
     def _collate_fn(self, batch):
         data = [i[0] for i in batch]

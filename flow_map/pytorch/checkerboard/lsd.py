@@ -187,7 +187,7 @@ class LSDTrainer(BaseTrainer):
         )
         return X_t, D_X_t
 
-    def compute_lsd_residual(self, x_1, c):
+    def compute_lsd_residual(self, x_1, c,t):
         B, N, D = x_1.shape
 
         x_0 = torch.randn_like(x_1)
@@ -214,6 +214,7 @@ class LSDTrainer(BaseTrainer):
         B, N, D = x_1.shape
 
         x_0 = torch.randn_like(x_1)
+        # BUG!!! Different value for t in flow and lsd.
         t = torch.rand([B], device=x_1.device)
 
         x_t = self.get_interpolant(x_0, x_1, t)

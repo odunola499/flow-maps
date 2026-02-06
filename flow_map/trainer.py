@@ -18,7 +18,7 @@ class Config:
     valid_interval:int = 10000
 
 class BaseTrainer(ABC):
-    def __init__(self, model, config:Config, trainer_type:str = 'pytorch'):
+    def __init__(self, model, config:Config = None, trainer_type:str = 'pytorch'):
         self.model = model
         self.config = config
         self.trainer_type = trainer_type
